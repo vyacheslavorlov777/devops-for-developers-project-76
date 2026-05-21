@@ -1,0 +1,7 @@
+---
+- name: Deploy Redmine application
+  hosts: webservers
+  become: true
+  roles:
+    - role: redmine
+    - role: datadog_agent

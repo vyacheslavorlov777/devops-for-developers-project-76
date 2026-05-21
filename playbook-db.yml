@@ -1,0 +1,6 @@
+---
+- name: Prepare PostgreSQL database for Redmine
+  hosts: dbservers
+  become: true
+  roles:
+    - role: postgresql

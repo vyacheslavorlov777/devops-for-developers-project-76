@@ -1,0 +1,99 @@
+---
+- name: Validate Datadog API key is set
+  ansible.builtin.assert:
+    that:
+      - datadog_api_key is defined
+      - datadog_api_key | length > 10
+      - datadog_api_key != "replace-with-your-datadog-api-key"
+    fail_msg: "Set vault_datadog_api_key in group_vars/webservers/vault.yml"
+
+- name: Download Datadog Agent install script
+  ansible.builtin.get_url:
+    url: https://s3.amazonaws.com/dd-agent/scripts/install_script_agent7.sh
+    dest: /tmp/install_datadog_agent7.sh
+    mode: "0755"
+    timeout: 30
+  when: not (ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_major_version'] | int >= 24)
+
+- name: Install Datadog Agent v7 from script
+  ansible.builtin.command:
+    cmd: /tmp/install_datadog_agent7.sh
+    creates: /usr/bin/datadog-agent
+  environment:
+    DD_API_KEY: "{{ datadog_api_key }}"
+    DD_SITE: "{{ datadog_site }}"
+  when: not (ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_major_version'] | int >= 24)
+
+- name: Add Datadog apt keyring (Ubuntu 24+)
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      install -m 0755 -d /usr/share/keyrings
+      tmpkey="$(mktemp)"
+      curl --connect-timeout 10 --max-time 20 -fsSL https://keys.datadoghq.com/DATADOG_APT_KEY_CURRENT.public >> "$tmpkey"
+      curl --connect-timeout 10 --max-time 20 -fsSL https://keys.datadoghq.com/DATADOG_APT_KEY_C0962C7D.public >> "$tmpkey"
+      curl --connect-timeout 10 --max-time 20 -fsSL https://keys.datadoghq.com/DATADOG_APT_KEY_382E94DE.public >> "$tmpkey"
+      gpg --batch --yes --dearmor -o /usr/share/keyrings/datadog-archive-keyring.gpg "$tmpkey"
+      rm -f "$tmpkey"
+  changed_when: false
+  when: ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_major_version'] | int >= 24
+
+- name: Add Datadog apt repository (Ubuntu 24+)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/datadog.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/usr/share/keyrings/datadog-archive-keyring.gpg] https://apt.datadoghq.com/ stable 7
+  when: ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_major_version'] | int >= 24
+
+- name: Install Datadog Agent package (Ubuntu 24+)
+  ansible.builtin.apt:
+    name: datadog-agent
+    state: present
+    update_cache: true
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    DD_API_KEY: "{{ datadog_api_key }}"
+    DD_SITE: "{{ datadog_site }}"
+  when: ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_major_version'] | int >= 24
+
+- name: Ensure Datadog http_check config directory exists
+  ansible.builtin.file:
+    path: /etc/datadog-agent/conf.d/http_check.d
+    state: directory
+    mode: "0755"
+
+- name: Ensure Datadog main config exists
+  ansible.builtin.copy:
+    src: /etc/datadog-agent/datadog.yaml.example
+    dest: /etc/datadog-agent/datadog.yaml
+    remote_src: true
+    mode: "0644"
+    force: false
+
+- name: Configure Datadog API key
+  ansible.builtin.lineinfile:
+    path: /etc/datadog-agent/datadog.yaml
+    regexp: '^api_key:'
+    line: "api_key: {{ datadog_api_key }}"
+  notify: Restart Datadog Agent
+
+- name: Configure Datadog site
+  ansible.builtin.lineinfile:
+    path: /etc/datadog-agent/datadog.yaml
+    regexp: '^site:'
+    line: "site: {{ datadog_site }}"
+  notify: Restart Datadog Agent
+
+- name: Configure Datadog http_check for Redmine
+  ansible.builtin.template:
+    src: http_check.yaml.j2
+    dest: /etc/datadog-agent/conf.d/http_check.d/conf.yaml
+    mode: "0644"
+  notify: Restart Datadog Agent
+
+- name: Ensure Datadog Agent is started and enabled
+  ansible.builtin.service:
+    name: datadog-agent
+    state: started
+    enabled: true

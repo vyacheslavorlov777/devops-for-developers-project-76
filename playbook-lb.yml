@@ -1,0 +1,6 @@
+---
+- name: Configure Nginx load balancer
+  hosts: lbservers
+  become: true
+  roles:
+    - role: loadbalancer

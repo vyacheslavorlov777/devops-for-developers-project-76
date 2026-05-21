@@ -1,0 +1,49 @@
+---
+- name: Install Nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+
+- name: Configure Nginx reverse proxy for Redmine
+  ansible.builtin.template:
+    src: redmine-lb.conf.j2
+    dest: /etc/nginx/sites-available/redmine-lb.conf
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Enable Redmine load balancer site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/redmine-lb.conf
+    dest: /etc/nginx/sites-enabled/redmine-lb.conf
+    state: link
+  notify: Reload Nginx
+
+- name: Disable default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload Nginx
+
+- name: Validate nginx config
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Ensure nginx service is enabled and started
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Apply pending nginx handler changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Check LB endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ redmine_port }}/"
+    method: GET
+    status_code: [200, 301, 302]
+  register: lb_healthcheck
+  retries: 10
+  delay: 3
+  until: lb_healthcheck.status in [200, 301, 302]
